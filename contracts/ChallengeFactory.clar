@@ -1,0 +1,151 @@
+(define-constant ERR-NOT-AUTHORIZED u100)
+(define-constant ERR-INVALID-NAME u101)
+(define-constant ERR-INVALID-GOAL u102)
+(define-constant ERR-INVALID-DURATION u103)
+(define-constant ERR-INVALID-MIN-CONTRIB u104)
+(define-constant ERR-INVALID-MAX-PARTS u105)
+(define-constant ERR-INVALID-CHALLENGE-TYPE u106)
+(define-constant ERR-INVALID-PENALTY-RATE u107)
+(define-constant ERR-INVALID-VOTING-THRESHOLD u108)
+(define-constant ERR-NAME-TAKEN u109)
+(define-constant ERR-FACTORY-LOCKED u110)
+(define-constant ERR-MAX-CHALLENGES-EXCEEDED u111)
+(define-constant ERR-INVALID-LOCATION u112)
+(define-constant ERR-INVALID-CURRENCY u113)
+(define-constant ERR-CHALLENGE-EXISTS u114)
+(define-constant ERR-INVALID-START-BLOCK u115)
+
+(define-data-var factory-admin principal tx-sender)
+(define-data-var next-challenge-id uint u0)
+(define-data-var max-challenges uint u1000)
+(define-data-var is-factory-active bool true)
+
+(define-map challenge-instances uint principal)
+(define-map challenge-by-name (string-utf8 100) uint)
+
+(define-read-only (get-challenge-contract (id uint))
+  (map-get? challenge-instances id)
+)
+
+(define-read-only (get-challenge-id-by-name (name (string-utf8 100)))
+  (map-get? challenge-by-name name)
+)
+
+(define-read-only (get-factory-stats)
+  (ok {
+    admin: (var-get factory-admin),
+    next-id: (var-get next-challenge-id),
+    max-challenges: (var-get max-challenges),
+    active: (var-get is-factory-active)
+  })
+)
+
+(define-private (validate-name (n (string-utf8 100)))
+  (if (and (> (len n) u0) (<= (len n) u100)) (ok true) (err ERR-INVALID-NAME))
+)
+
+(define-private (validate-goal (g uint))
+  (if (> g u0) (ok true) (err ERR-INVALID-GOAL))
+)
+
+(define-private (validate-duration (d uint))
+  (if (> d u0) (ok true) (err ERR-INVALID-DURATION))
+)
+
+(define-private (validate-min-contrib (m uint))
+  (if (> m u0) (ok true) (err ERR-INVALID-MIN-CONTRIB))
+)
+
+(define-private (validate-max-parts (mp uint))
+  (if (and (> mp u0) (<= mp u100)) (ok true) (err ERR-INVALID-MAX-PARTS))
+)
+
+(define-private (validate-challenge-type (ct (string-utf8 50)))
+  (if (or (is-eq ct u"fitness") (is-eq ct u"meditation") (is-eq ct u"reading") (is-eq ct u"sleep"))
+      (ok true)
+      (err ERR-INVALID-CHALLENGE-TYPE))
+)
+
+(define-private (validate-penalty-rate (pr uint))
+  (if (<= pr u100) (ok true) (err ERR-INVALID-PENALTY-RATE))
+)
+
+(define-private (validate-voting-threshold (vt uint))
+  (if (and (> vt u0) (<= vt u100)) (ok true) (err ERR-INVALID-VOTING-THRESHOLD))
+)
+
+(define-private (validate-location (loc (string-utf8 100)))
+  (if (and (> (len loc) u0) (<= (len loc) u100)) (ok true) (err ERR-INVALID-LOCATION))
+)
+
+(define-private (validate-currency (cur (string-utf8 20)))
+  (if (or (is-eq cur u"STX") (is-eq cur u"sBTC")) (ok true) (err ERR-INVALID-CURRENCY))
+)
+
+(define-public (create-challenge
+  (name (string-utf8 100))
+  (goal uint)
+  (duration uint)
+  (min-contrib uint)
+  (max-parts uint)
+  (ctype (string-utf8 50))
+  (penalty-rate uint)
+  (voting-threshold uint)
+  (location (string-utf8 100))
+  (currency (string-utf8 20)))
+  (let ((challenge-id (var-get next-challenge-id))
+        (current-max (var-get max-challenges)))
+    (asserts! (var-get is-factory-active) (err ERR-FACTORY-LOCKED))
+    (asserts! (< challenge-id current-max) (err ERR-MAX-CHALLENGES-EXCEEDED))
+    (try! (validate-name name))
+    (try! (validate-goal goal))
+    (try! (validate-duration duration))
+    (try! (validate-min-contrib min-contrib))
+    (try! (validate-max-parts max-parts))
+    (try! (validate-challenge-type ctype))
+    (try! (validate-penalty-rate penalty-rate))
+    (try! (validate-voting-threshold voting-threshold))
+    (try! (validate-location location))
+    (try! (validate-currency currency))
+    (asserts! (is-none (map-get? challenge-by-name name)) (err ERR-NAME-TAKEN))
+    (let ((instance-principal (try! (contract-call? .ChallengeInstance deploy-new-instance challenge-id goal duration min-contrib max-parts ctype penalty-rate voting-threshold location currency))))
+      (map-set challenge-instances challenge-id instance-principal)
+      (map-set challenge-by-name name challenge-id)
+      (var-set next-challenge-id (+ challenge-id u1))
+      (ok challenge-id)
+    )
+  )
+)
+
+(define-public (pause-factory)
+  (begin
+    (asserts! (is-eq tx-sender (var-get factory-admin)) (err ERR-NOT-AUTHORIZED))
+    (var-set is-factory-active false)
+    (ok true)
+  )
+)
+
+(define-public (resume-factory)
+  (begin
+    (asserts! (is-eq tx-sender (var-get factory-admin)) (err ERR-NOT-AUTHORIZED))
+    (var-set is-factory-active true)
+    (ok true)
+  )
+)
+
+(define-public (transfer-admin (new-admin principal))
+  (begin
+    (asserts! (is-eq tx-sender (var-get factory-admin)) (err ERR-NOT-AUTHORIZED))
+    (var-set factory-admin new-admin)
+    (ok true)
+  )
+)
+
+(define-public (set-max-challenges (new-max uint))
+  (begin
+    (asserts! (is-eq tx-sender (var-get factory-admin)) (err ERR-NOT-AUTHORIZED))
+    (asserts! (> new-max (var-get next-challenge-id)) (err ERR-INVALID-START-BLOCK))
+    (var-set max-challenges new-max)
+    (ok true)
+  )
+)
